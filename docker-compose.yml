@@ -20,6 +20,9 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      - MONGO_URL=mongodb://database:27017
+      - DB_NAME=streamflix_db
     depends_on:
       - database
     networks:
@@ -32,6 +35,7 @@ services:
     restart: unless-stopped
     ports:
       - "3000:80"
+      - "80:80"
     depends_on:
       - backend
     networks:

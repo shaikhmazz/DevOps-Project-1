@@ -19,7 +19,6 @@ pipeline {
             steps {
                 echo 'Validating Python Backend...'
                 dir('app/backend') {
-                    // Check Python syntax and dependencies
                     sh 'python3 -m py_compile server.py || python -m py_compile server.py || true'
                 }
                 echo 'Backend validated successfully.'
@@ -53,7 +52,7 @@ pipeline {
         }
         success {
             echo "=========================================================="
-            echo " Pipeline Succeeded! All Docker images built and pushed to Docker Hub."
+            echo " Pipeline Succeeded! App is hosted at: http://${env.EC2_IP}:3000"
             echo "=========================================================="
         }
         failure {
