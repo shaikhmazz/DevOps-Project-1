@@ -2,11 +2,9 @@ pipeline {
     agent any
 
     environment {
-        // Docker Hub & EC2 Credentials stored in Jenkins
+        // Docker Hub Credentials stored in Jenkins
         DOCKER_CREDS_ID = 'dockerHub-Credits'
-        EC2_CREDS_ID    = 'mazain278'
         EC2_IP          = '98.130.120.132'
-        EC2_USER        = 'ubuntu'
     }
 
     stages {
@@ -47,8 +45,6 @@ pipeline {
                 echo 'Images pushed to Docker Hub successfully.'
             }
         }
-
-      
     }
 
     post {
@@ -57,7 +53,7 @@ pipeline {
         }
         success {
             echo "=========================================================="
-            echo " Pipeline Succeeded! App is running at: http://${env.EC2_IP}:3000"
+            echo " Pipeline Succeeded! All Docker images built and pushed to Docker Hub."
             echo "=========================================================="
         }
         failure {
