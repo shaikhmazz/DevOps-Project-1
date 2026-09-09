@@ -3,9 +3,9 @@ pipeline {
 
     environment {
         // Docker Hub & EC2 Credentials stored in Jenkins
-        DOCKER_CREDS_ID = 'dockerHub-Credits'
-        EC2_CREDS_ID    = 'Jenk-123'
-        EC2_IP          = '40.192.25.143'
+        DOCKER_CREDS_ID = 'maxain27'
+        EC2_CREDS_ID    = 'mazain27'
+        EC2_IP          = '98.130.120.132'
         EC2_USER        = 'ubuntu'
     }
 
