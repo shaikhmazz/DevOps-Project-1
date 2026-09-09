@@ -48,29 +48,7 @@ pipeline {
             }
         }
 
-        stage('Deploy to Remote EC2') {
-            steps {
-                echo "Deploying application to remote EC2 server (${env.EC2_IP})..."
-                sshagent([env.EC2_CREDS_ID]) {
-                    // 1. Create deployment directory on remote EC2
-                    sh "ssh -o StrictHostKeyChecking=no ${env.EC2_USER}@${env.EC2_IP} 'mkdir -p ~/deployment'"
-
-                    // 2. Copy docker-compose.yml to remote EC2
-                    sh "scp -o StrictHostKeyChecking=no docker-compose.yml ${env.EC2_USER}@${env.EC2_IP}:~/deployment/"
-
-                    // 3. Log in, pull new images, and restart containers on EC2
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${env.EC2_USER}@${env.EC2_IP} '
-                            cd ~/deployment &&
-                            docker compose pull &&
-                            docker compose down &&
-                            docker compose up -d
-                        '
-                    """
-                }
-                echo 'Application deployed successfully on EC2!'
-            }
-        }
+      
     }
 
     post {
