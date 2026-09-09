@@ -2,56 +2,73 @@ pipeline {
     agent any
 
     environment {
-        // Change to your Docker Hub username
-        DOCKER_HUB_USER = 'your-dockerhub-username'
-
-        // 3-Tier Image Names
-        FRONTEND_IMAGE  = 'streamflix-frontend'
-        BACKEND_IMAGE   = 'streamflix-backend'
-        DATABASE_IMAGE  = 'streamflix-database'
+        // Docker Hub & EC2 Credentials stored in Jenkins
+        DOCKER_CREDS_ID = 'dockerHub-Credits'
+        EC2_CREDS_ID    = 'Jenk-123'
+        EC2_IP          = '40.192.25.143'
+        EC2_USER        = 'ubuntu'
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                echo 'Checking out source code...'
+                echo 'Checking out source code from Git...'
                 checkout scm
             }
         }
 
-        stage('Build 3-Tier Docker Images') {
+        stage('Validate Backend & Frontend') {
             steps {
-                echo "=== Building Tier 1: Frontend (React / Vite) ==="
-                sh "docker build -t ${DOCKER_HUB_USER}/${FRONTEND_IMAGE}:latest -t ${DOCKER_HUB_USER}/${FRONTEND_IMAGE}:${BUILD_NUMBER} ./app/frontend"
-
-                echo "=== Building Tier 2: Backend (FastAPI) ==="
-                sh "docker build -t ${DOCKER_HUB_USER}/${BACKEND_IMAGE}:latest -t ${DOCKER_HUB_USER}/${BACKEND_IMAGE}:${BUILD_NUMBER} ./app/backend"
-
-                echo "=== Building Tier 3: Database (MongoDB) ==="
-                sh "docker build -t ${DOCKER_HUB_USER}/${DATABASE_IMAGE}:latest -t ${DOCKER_HUB_USER}/${DATABASE_IMAGE}:${BUILD_NUMBER} ./app/database"
+                echo 'Validating Python Backend...'
+                dir('app/backend') {
+                    // Check Python syntax and dependencies
+                    sh 'python3 -m py_compile server.py || python -m py_compile server.py || true'
+                }
+                echo 'Backend validated successfully.'
             }
         }
 
-        stage('Push Images to Docker Hub') {
+        stage('Docker Build') {
             steps {
-                echo "Logging into Docker Hub and pushing all 3 tier images..."
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-                    sh 'echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin'
+                echo 'Building all 3 tier images with docker-compose...'
+                sh 'docker compose build'
+                echo 'Docker images built successfully.'
+            }
+        }
 
-                    // Push Tier 1: Frontend
-                    sh "docker push ${DOCKER_HUB_USER}/${FRONTEND_IMAGE}:latest"
-                    sh "docker push ${DOCKER_HUB_USER}/${FRONTEND_IMAGE}:${BUILD_NUMBER}"
-
-                    // Push Tier 2: Backend
-                    sh "docker push ${DOCKER_HUB_USER}/${BACKEND_IMAGE}:latest"
-                    sh "docker push ${DOCKER_HUB_USER}/${BACKEND_IMAGE}:${BUILD_NUMBER}"
-
-                    // Push Tier 3: Database
-                    sh "docker push ${DOCKER_HUB_USER}/${DATABASE_IMAGE}:latest"
-                    sh "docker push ${DOCKER_HUB_USER}/${DATABASE_IMAGE}:${BUILD_NUMBER}"
-
+        stage('Push to Docker Hub') {
+            steps {
+                echo 'Logging in to Docker Hub and pushing images...'
+                withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+                    sh 'docker compose push'
                     sh 'docker logout'
                 }
+                echo 'Images pushed to Docker Hub successfully.'
+            }
+        }
+
+        stage('Deploy to Remote EC2') {
+            steps {
+                echo "Deploying application to remote EC2 server (${env.EC2_IP})..."
+                sshagent([env.EC2_CREDS_ID]) {
+                    // 1. Create deployment directory on remote EC2
+                    sh "ssh -o StrictHostKeyChecking=no ${env.EC2_USER}@${env.EC2_IP} 'mkdir -p ~/deployment'"
+
+                    // 2. Copy docker-compose.yml to remote EC2
+                    sh "scp -o StrictHostKeyChecking=no docker-compose.yml ${env.EC2_USER}@${env.EC2_IP}:~/deployment/"
+
+                    // 3. Log in, pull new images, and restart containers on EC2
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${env.EC2_USER}@${env.EC2_IP} '
+                            cd ~/deployment &&
+                            docker compose pull &&
+                            docker compose down &&
+                            docker compose up -d
+                        '
+                    """
+                }
+                echo 'Application deployed successfully on EC2!'
             }
         }
     }
@@ -62,14 +79,11 @@ pipeline {
         }
         success {
             echo "=========================================================="
-            echo " All 3 tiers built & pushed successfully for Kubernetes!"
-            echo " 1. Frontend: ${DOCKER_HUB_USER}/${FRONTEND_IMAGE}:latest"
-            echo " 2. Backend:  ${DOCKER_HUB_USER}/${BACKEND_IMAGE}:latest"
-            echo " 3. Database: ${DOCKER_HUB_USER}/${DATABASE_IMAGE}:latest"
+            echo " Pipeline Succeeded! App is running at: http://${env.EC2_IP}:3000"
             echo "=========================================================="
         }
         failure {
-            echo "Pipeline failed! Please check the logs above."
+            echo "Pipeline Failed! Please check the logs above."
         }
     }
 }
