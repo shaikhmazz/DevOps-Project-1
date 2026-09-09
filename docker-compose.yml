@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  database:
+    image: maxain27/alpha-database:latest
+    build: ./app/database
+    container_name: alpha-database
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - db-data:/data/db
+    networks:
+      - app-network
+
+  backend:
+    image: maxain27/alpha-backend:latest
+    build: ./app/backend
+    container_name: alpha-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      - database
+    networks:
+      - app-network
+
+  frontend:
+    image: maxain27/alpha-frontend:latest
+    build: ./app/frontend
+    container_name: alpha-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  db-data:

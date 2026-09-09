@@ -26,8 +26,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Persistent Data Storage for developer & offline backups
-DATA_DIR = ROOT_DIR / 'data'
+# Persistent Data Storage (configurable via DATA_DIR environment variable)
+DATA_DIR = Path(os.getenv('DATA_DIR', ROOT_DIR / 'data'))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR = DATA_DIR / 'uploads'
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -123,7 +123,7 @@ def save_physical_image(user_email: str, image_id: str, data_url: str, title: st
 
 # -------- MongoDB Connection --------
 mongo_url = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
-client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=1500)
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=3000)
 db_name = os.getenv('DB_NAME', 'streamflix_db')
 db = client[db_name]
 
@@ -137,7 +137,13 @@ for img in initial_images:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"Loaded {len(IN_MEMORY_IMAGES)} image(s) from developer database file.")
+    try:
+        await db.users.create_index("email", unique=True)
+        await db.images.create_index("user_email")
+        await db.images.create_index("id", unique=True)
+        logger.info(f"Database ready: Connected to MongoDB at {mongo_url}, database '{db_name}'.")
+    except Exception as e:
+        logger.warning(f"MongoDB connection check notice: {e}. Fallback disk storage active.")
     yield
     client.close()
 
@@ -210,10 +216,25 @@ async def register(payload: UserRegister):
     if len(password) < 4:
         raise HTTPException(status_code=400, detail="Password must contain at least 4 characters.")
 
-    users = load_credentials()
-    for u in users:
-        if u["email"] == email:
-            raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
+    # 1. Primary check: check MongoDB for existing user account
+    user_exists = False
+    try:
+        existing_user = await db.users.find_one({"email": email})
+        if existing_user:
+            user_exists = True
+    except Exception as e:
+        logger.warning(f"MongoDB check notice: {e}")
+
+    # Fallback check in local file if MongoDB was unreachable
+    if not user_exists:
+        users = load_credentials()
+        for u in users:
+            if u.get("email") == email:
+                user_exists = True
+                break
+
+    if user_exists:
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
 
     # Hash password with unique salt
     salt, hashed = hash_password(password)
@@ -223,20 +244,23 @@ async def register(payload: UserRegister):
     new_user = {
         "id": user_id,
         "email": email,
-        "password": password,  # Stored so developer can view client credentials directly in credentials.json
+        "password": password,
         "password_hash": hashed,
         "salt": salt,
         "created_at": now_iso,
     }
 
-    users.append(new_user)
-    save_credentials(users)
-
-    # Also persist to MongoDB users collection if available
+    # 2. Save user directly to MongoDB Database Tier
     try:
         await db.users.insert_one(new_user.copy())
+        logger.info(f"Saved new user to MongoDB database: {email}")
     except Exception as e:
-        logger.warning(f"MongoDB offline/unreachable: {e}. Saved user in credentials file.")
+        logger.warning(f"MongoDB insert error: {e}. Falling back to disk.")
+
+    # Also keep in local backup storage
+    users = load_credentials()
+    users.append(new_user)
+    save_credentials(users)
 
     logger.info(f"Registered new user account: {email}")
     return UserOut(id=user_id, email=email, created_at=now_iso)
@@ -247,17 +271,17 @@ async def login(payload: UserLogin):
     email = payload.email.lower().strip()
     password = payload.password.strip()
 
-    users = load_credentials()
-    user = next((u for u in users if u.get("email") == email), None)
+    user = None
+    # 1. Primary: Fetch user directly from MongoDB Database Tier
+    try:
+        user = await db.users.find_one({"email": email})
+    except Exception as e:
+        logger.warning(f"MongoDB query notice during login: {e}")
 
-    # If not in credentials file, check MongoDB
+    # 2. Fallback: Check local credentials file if database offline
     if not user:
-        try:
-            mongo_user = await db.users.find_one({"email": email})
-            if mongo_user:
-                user = mongo_user
-        except Exception as e:
-            logger.warning(f"MongoDB offline: {e}")
+        users = load_credentials()
+        user = next((u for u in users if u.get("email") == email), None)
 
     if not user:
         raise HTTPException(
@@ -279,7 +303,7 @@ async def login(payload: UserLogin):
     if not is_valid:
         raise HTTPException(status_code=401, detail="Incorrect password. Please try again.")
 
-    logger.info(f"User logged in successfully: {email}")
+    logger.info(f"User logged in successfully from database: {email}")
     return UserOut(id=user["id"], email=user["email"], created_at=str(user.get("created_at", "")))
 
 
@@ -361,18 +385,19 @@ async def create_image(payload: ImageCreate):
         "created_at": now_dt,
     }
 
-    # 2. Save in developer JSON database file (permanent disk copy)
+    # 2. Save in MongoDB Database Tier (Primary)
+    try:
+        await db.images.insert_one(doc.copy())
+        logger.info(f"Saved image {img_id} directly to MongoDB database for {user_email}")
+    except Exception as e:
+        logger.warning(f"MongoDB offline/unreachable during upload: {e}. Stored in backup file.")
+
+    # 3. Save in local backup storage
     all_imgs = load_images_db()
     json_doc = doc.copy()
     json_doc["created_at"] = now_dt.isoformat()
     all_imgs.append(json_doc)
     save_images_db(all_imgs)
-
-    # 3. Save to MongoDB if online
-    try:
-        await db.images.insert_one(doc.copy())
-    except Exception as e:
-        logger.warning(f"MongoDB offline/unreachable: {e}. Saved to local developer database file.")
 
     # 4. Cache in memory
     IN_MEMORY_IMAGES[doc["id"]] = doc
@@ -384,21 +409,31 @@ async def create_image(payload: ImageCreate):
 
 @api_router.get("/images", response_model=List[ImageOut])
 async def list_images(user_email: str = Query(...)):
+    """Fetches user images from the Database Tier when user visits or re-enters the website"""
     ue = user_email.lower().strip()
+
+    # 1. Primary: Retrieve all saved images directly from MongoDB Database Tier
     try:
         cursor = db.images.find({"user_email": ue}).sort("created_at", -1)
-        items = await cursor.to_list(500)
-        if items:
-            for it in items:
-                it.pop("_id", None)
-            return [ImageOut(**it) for it in items]
+        items = await cursor.to_list(1000)
+        result = []
+        for it in items:
+            it.pop("_id", None)
+            created_at_val = it.get("created_at")
+            if isinstance(created_at_val, str):
+                try:
+                    created_at_val = datetime.fromisoformat(created_at_val)
+                except Exception:
+                    created_at_val = datetime.now(timezone.utc)
+            it["created_at"] = created_at_val
+            result.append(ImageOut(**it))
+        return result
     except Exception as e:
-        logger.warning(f"MongoDB offline/unreachable: {e}. Reading from developer database file.")
+        logger.warning(f"MongoDB offline/unreachable: {e}. Reading from disk fallback.")
 
-    # Read from persistent developer database file
+    # 2. Fallback: Read from persistent disk file
     db_items = load_images_db()
     user_items = [it for it in db_items if it.get("user_email") == ue]
-    # Sort descending
     user_items.sort(key=lambda x: str(x.get("created_at", "")), reverse=True)
 
     result = []
@@ -426,34 +461,35 @@ async def list_images(user_email: str = Query(...)):
 async def update_image(image_id: str, title: str = Query(...), user_email: str = Query(...)):
     ue = user_email.lower().strip()
     new_title = title.strip()
-
-    # 1. Update in local developer database
-    all_imgs = load_images_db()
-    found = False
     target_doc = None
-    for item in all_imgs:
-        if item.get("id") == image_id and item.get("user_email") == ue:
-            item["title"] = new_title
-            found = True
-            target_doc = item
-            break
-    if found:
-        save_images_db(all_imgs)
 
-    # 2. Update Mongo if online
+    # 1. Primary: Update in MongoDB
     try:
-        await db.images.find_one_and_update(
+        updated_mongo = await db.images.find_one_and_update(
             {"id": image_id, "user_email": ue},
             {"$set": {"title": new_title}},
             return_document=True,
         )
+        if updated_mongo:
+            updated_mongo.pop("_id", None)
+            target_doc = updated_mongo
     except Exception as e:
-        logger.warning(f"MongoDB offline/unreachable: {e}.")
+        logger.warning(f"MongoDB offline/unreachable during update: {e}")
+
+    # 2. Update local database file
+    all_imgs = load_images_db()
+    for item in all_imgs:
+        if item.get("id") == image_id and item.get("user_email") == ue:
+            item["title"] = new_title
+            if not target_doc:
+                target_doc = item
+    save_images_db(all_imgs)
 
     # 3. Update memory
     if image_id in IN_MEMORY_IMAGES and IN_MEMORY_IMAGES[image_id]["user_email"] == ue:
         IN_MEMORY_IMAGES[image_id]["title"] = new_title
-        target_doc = IN_MEMORY_IMAGES[image_id]
+        if not target_doc:
+            target_doc = IN_MEMORY_IMAGES[image_id]
 
     if not target_doc:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -480,13 +516,20 @@ async def delete_image(image_id: str, user_email: str = Query(...)):
     ue = user_email.lower().strip()
     deleted = False
 
-    # 1. Remove from local database file and delete physical file
+    # 1. Primary: Remove from MongoDB
+    try:
+        res = await db.images.delete_one({"id": image_id, "user_email": ue})
+        if res.deleted_count > 0:
+            deleted = True
+    except Exception as e:
+        logger.warning(f"MongoDB delete error: {e}")
+
+    # 2. Remove from local database file and delete physical file
     all_imgs = load_images_db()
     remaining = []
     for item in all_imgs:
         if item.get("id") == image_id and item.get("user_email") == ue:
             deleted = True
-            # Delete physical file from disk if exists
             rel_file = item.get("file_path")
             if rel_file:
                 p = DATA_DIR / rel_file
@@ -501,14 +544,6 @@ async def delete_image(image_id: str, user_email: str = Query(...)):
 
     if deleted:
         save_images_db(remaining)
-
-    # 2. Remove from Mongo if online
-    try:
-        res = await db.images.delete_one({"id": image_id, "user_email": ue})
-        if res.deleted_count > 0:
-            deleted = True
-    except Exception as e:
-        logger.warning(f"MongoDB offline/unreachable: {e}.")
 
     # 3. Remove from memory
     if image_id in IN_MEMORY_IMAGES and IN_MEMORY_IMAGES[image_id]["user_email"] == ue:
