@@ -363,9 +363,9 @@ async def get_developer_storage_info():
 async def create_image(payload: ImageCreate):
     if not payload.data_url.startswith("data:image/"):
         raise HTTPException(status_code=400, detail="Invalid image data URL")
-    # Basic size guard (~20 MB base64 => ~15 MB image)
-    if len(payload.data_url) > 20_000_000:
-        raise HTTPException(status_code=413, detail="Image too large (max ~15 MB)")
+    # Size guard (~50 MB base64 => ~35 MB image)
+    if len(payload.data_url) > 50_000_000:
+        raise HTTPException(status_code=413, detail="Image too large (max ~35 MB)")
 
     img_id = str(uuid.uuid4())
     user_email = payload.user_email.lower().strip()
