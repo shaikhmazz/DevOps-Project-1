@@ -13,13 +13,18 @@ spec:
     metadata:
       labels:
         app: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: backend
           image: maxain27/alpha-backend:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 8000
+            - name: http-metrics
+              containerPort: 8000
           env:
             - name: MONGO_URL
               value: "mongodb://database:27017"
@@ -32,10 +37,15 @@ metadata:
   name: backend
   labels:
     app: backend
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
 spec:
   type: NodePort
   ports:
-    - port: 8000
+    - name: http-metrics
+      port: 8000
       targetPort: 8000
       nodePort: 30800
   selector:
