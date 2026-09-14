@@ -4,10 +4,31 @@ pipeline {
     environment {
         // Docker Hub Credentials stored in Jenkins
         DOCKER_CREDS_ID = 'dockerHub-Credits'
-        EC2_IP          = '98.130.120.132'
+        EC2_IP          = ''
     }
 
     stages {
+        stage('Detect Instance IP') {
+            steps {
+                script {
+                    env.EC2_IP = sh(
+                        script: '''
+                            TOKEN=$(curl -s -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+                            if [ -n "$TOKEN" ]; then
+                                IP=$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
+                            fi
+                            if [ -z "$IP" ]; then
+                                IP=$(curl -s -m 2 https://checkip.amazonaws.com 2>/dev/null || curl -s -m 2 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+                            fi
+                            echo "$IP" | tr -d ' \n\r'
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                    echo "Auto-detected Instance IP: ${env.EC2_IP}"
+                }
+            }
+        }
+
         stage('Checkout Code') {
             steps {
                 echo 'Checking out source code from Git...'
