@@ -3,3 +3,4 @@ uvicorn
 motor
 python-dotenv
 pydantic
+prometheus-fastapi-instrumentator==7.0.0

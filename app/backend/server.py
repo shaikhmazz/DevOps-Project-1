@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Query
+from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -149,6 +150,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 api_router = APIRouter(prefix="/api")
 
 # Serve uploaded physical files directly so developer or frontend can view them

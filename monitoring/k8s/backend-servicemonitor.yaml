@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: alpha-backend
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - alpha
+      - default
+  selector:
+    matchLabels:
+      app: backend
+  endpoints:
+    - targetPort: 8000
+      path: /metrics
+      interval: 15s
