@@ -7,7 +7,7 @@ pipeline {
     
     environment {
         // Variables for easy configuration
-        DOCKER_CREDS_ID = 'docker-hub-creds'
+        DOCKER_CREDS_ID = 'dockerHub-Credits'
         EC2_CREDS_ID = 'jenkins01'
         EC2_IP = '16.112.8.187'
         EC2_USER = 'ubuntu'
